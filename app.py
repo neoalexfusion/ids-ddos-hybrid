@@ -1,40 +1,65 @@
-import pandas as pd
-import joblib
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+import joblib
+import numpy as np
+import os
 
+# Initialize the Flask app
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
 
-# Load pre-trained models and features
-rf_model = joblib.load("hybrid_model_rf.pkl")
-isolation_forest = joblib.load("hybrid_model_isolation_forest.pkl")
-features = joblib.load("hybrid_model_features.pkl")
+# Load the models and features
+try:
+    rf_model = joblib.load("hybrid_model_rf.pkl")
+    isolation_forest = joblib.load("hybrid_model_isolation_forest.pkl")
+    features = joblib.load("hybrid_model_features.pkl")
+except Exception as e:
+    print(f"Error loading models or features: {e}")
 
+@app.route("/", methods=["GET"])
+def home():
+    """
+    API Root Endpoint
+    """
+    return jsonify({"message": "Hybrid DDoS Detection API is running!"})
 
 @app.route("/predict", methods=["POST"])
 def predict():
+    """
+    Predict DDoS attack or benign traffic based on input features.
+    """
     try:
-        # Get JSON data from request
-        data = request.get_json()
-        input_data = pd.DataFrame([data])
+        # Parse input JSON
+        data = request.json
+        if not data:
+            return jsonify({"error": "No input data provided"}), 400
 
-        # Use Isolation Forest for anomaly detection
-        anomaly_scores = isolation_forest.predict(input_data[features])
-        if -1 in anomaly_scores:
-            return jsonify({"prediction": "Anomaly Detected (Potential DDoS)"})
+        # Ensure the input has all required features
+        input_features = np.array([data.get(feature, 0) for feature in features]).reshape(1, -1)
 
-        # Use Random Forest for prediction
-        input_data = input_data[features]
-        prediction = rf_model.predict(input_data)
-        result = "Attack" if prediction[0] == 0 else "Benign"
+        # Isolation Forest Prediction (-1: Anomaly, 1: Normal)
+        anomaly = isolation_forest.predict(input_features)[0]
 
-        return jsonify({"prediction": result})
+        # Random Forest Prediction (0: Attack, 1: Benign)
+        rf_probs = rf_model.predict_proba(input_features)[0][1]  # Probability of benign
+        threshold = 0.7  # Set your decision threshold here
+        rf_prediction = int(rf_probs >= threshold)
+
+        # Hybrid Model Decision Logic
+        if anomaly == -1:  # If flagged as anomaly
+            final_prediction = 0 if rf_prediction == 0 else 1  # Attack if RF also predicts attack
+        else:
+            final_prediction = rf_prediction  # Use RF prediction for normal data
+
+        # Return the prediction result
+        result = {
+            "anomaly_flag": int(anomaly == -1),
+            "rf_prediction": rf_prediction,
+            "final_prediction": "Attack" if final_prediction == 0 else "Benign",
+        }
+        return jsonify(result)
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True)
-#Yay
+    # For local testing; Vercel will handle `app` internally
+    app.run(host="0.0.0.0", port=5000)
