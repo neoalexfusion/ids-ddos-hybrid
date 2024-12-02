@@ -1,4 +1,6 @@
 .vercel/
 .venv/
+venv/
+.DS_Store
 
 
